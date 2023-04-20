@@ -56,10 +56,10 @@ func main() {
 		return
 	}
 
-	data, err := ioutil.ReadFile("README.md")
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	fmt.Println(string(data))
+	//data, err := ioutil.ReadFile("README.md")
+	//if err != nil {
+	//	fmt.Println(err)
+	//	return
+	//}
+	//fmt.Println(string(data))
 }
