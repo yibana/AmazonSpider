@@ -1,7 +1,6 @@
 package main
 
 import (
-	"AmazonSpider/routes"
 	"github.com/gin-gonic/gin"
 )
 
@@ -16,9 +15,9 @@ func main() {
 			"message": "Hello world!",
 		})
 	})
-	r.GET("/readme", routes.Readme)
-	r.GET("/categorys", routes.AllCategorys)
-	r.GET("/product", routes.GetProduct)
+	//r.GET("/readme", routes.Readme)
+	//r.GET("/categorys", routes.AllCategorys)
+	//r.GET("/product", routes.GetProduct)
 
 	r.Run()
 }
