@@ -65,7 +65,7 @@ func GetProduct(c *gin.Context) {
 
 	// On every product page
 	cy.OnHTML("#dp-container", func(e *colly.HTMLElement) {
-		ioutil.WriteFile("product.html", []byte(string(e.Response.Body)), 0644)
+		//ioutil.WriteFile("product.html", []byte(string(e.Response.Body)), 0644)
 		product.ASIN = e.ChildAttr("div[data-asin]", "data-asin")
 		product.Title = e.ChildText("#productTitle")
 		product.Price = e.ChildText("#corePriceDisplay_desktop_feature_div span.a-offscreen")
