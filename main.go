@@ -1,14 +1,8 @@
 package main
 
 import (
-	"AmazonSpider/amazon"
 	"AmazonSpider/routes"
-	"AmazonSpider/utils"
-	"context"
 	"github.com/gin-gonic/gin"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
-	"time"
 )
 
 // 使用gin框架
@@ -29,32 +23,32 @@ func main() {
 	r.Run()
 }
 
-func createCollection() (*mongo.Collection, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(utils.MongodbUrl))
-	if err != nil {
-		return nil, err
-	}
-
-	collection := client.Database("mydb").Collection("categories")
-
-	return collection, nil
-}
-
-func Save(category *amazon.Category) error {
-	collection, err := createCollection()
-	if err != nil {
-		return err
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	if _, err := collection.InsertOne(ctx, category); err != nil {
-		return err
-	}
-
-	return nil
-}
+//func createCollection() (*mongo.Collection, error) {
+//	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+//	defer cancel()
+//
+//	client, err := mongo.Connect(ctx, options.Client().ApplyURI(utils.MongodbUrl))
+//	if err != nil {
+//		return nil, err
+//	}
+//
+//	collection := client.Database("mydb").Collection("categories")
+//
+//	return collection, nil
+//}
+//
+//func Save(category *amazon.Category) error {
+//	collection, err := createCollection()
+//	if err != nil {
+//		return err
+//	}
+//
+//	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+//	defer cancel()
+//
+//	if _, err := collection.InsertOne(ctx, category); err != nil {
+//		return err
+//	}
+//
+//	return nil
+//}
