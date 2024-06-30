@@ -313,7 +313,7 @@ func addIgnoreSeller(c *gin.Context) {
 func deleteIgnoreSeller(c *gin.Context) {
 	sellerID := c.Param("seller_id")
 	collection := db.Collection("ignore_sellers")
-	_, err := collection.DeleteOne(context.TODO(), bson.M{"sellerid": sellerID})
+	_, err := collection.DeleteOne(context.TODO(), bson.M{"seller_id": sellerID})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
