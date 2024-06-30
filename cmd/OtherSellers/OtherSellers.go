@@ -18,7 +18,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	err = scraper.FetchAndSaveASINDataConcurrent(asin, 100, 2)
+	err = scraper.SpiderTask(asin, 100, 2)
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -4,6 +4,7 @@ import (
 	"AmazonSpider/models"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/Danny-Dasilva/CycleTLS/cycletls"
 	"github.com/PuerkitoBio/goquery"
@@ -28,16 +29,20 @@ import (
 
 // AmazonScraper represents the Amazon scraper with a reusable HTTP client
 type AmazonScraper struct {
-	client         *http.Client
-	mongoClient    *mongo.Client
-	db             *mongo.Database
-	fetchedItems   map[string]bool
-	fetchedSellers map[string]bool
-	ignoreSellers  map[string]bool
-	TaskPaused     bool                       // 添加暂停标志
-	ItemChan       chan []models.MerchantItem // 添加 channel
-	wg             sync.WaitGroup
-	m              *mimic.ClientSpec
+	client               *http.Client
+	mongoClient          *mongo.Client
+	db                   *mongo.Database
+	ignoreSellers        sync.Map
+	TaskPaused           bool                       // 添加暂停标志
+	ItemChan             chan []models.MerchantItem // 添加 channel
+	wg                   sync.WaitGroup
+	m                    *mimic.ClientSpec
+	fetchedSellers       sync.Map
+	SpiderLog            *log.Logger      // 添加 SpiderLog
+	logBuffer            *strings.Builder // 存储日志内容的 buffer
+	SpiderTaskStaring    bool
+	spiderTaskCancelFunc context.CancelFunc
+	spiderTaskCtx        context.Context
 }
 
 // NewAmazonScraper creates a new AmazonScraper with a default HTTP client
@@ -49,14 +54,17 @@ func NewAmazonScraper(dbURI, dbName string, maxChanSize int) (*AmazonScraper, er
 	if err != nil {
 		return nil, err
 	}
+	logBuffer := &strings.Builder{}
+	spiderLog := log.New(logBuffer, "SpiderLog: ", log.LstdFlags)
 	scraper := &AmazonScraper{
 		client:         client,
 		mongoClient:    mongoClient,
 		db:             mongoClient.Database(dbName),
-		fetchedItems:   make(map[string]bool),
-		fetchedSellers: make(map[string]bool),
 		ItemChan:       make(chan []models.MerchantItem, maxChanSize), // 初始化 channel
 		m:              m,
+		fetchedSellers: sync.Map{},
+		logBuffer:      logBuffer,
+		SpiderLog:      spiderLog,
 	}
 	err = scraper.loadIgnoreSellers()
 	if err != nil {
@@ -116,7 +124,7 @@ func (s *AmazonScraper) loadIgnoreSellers() error {
 	}
 	defer cursor.Close(context.TODO())
 
-	s.ignoreSellers = make(map[string]bool)
+	s.ignoreSellers = sync.Map{}
 	for cursor.Next(context.TODO()) {
 		var result struct {
 			SellerID string `bson:"seller_id"`
@@ -124,7 +132,7 @@ func (s *AmazonScraper) loadIgnoreSellers() error {
 		if err := cursor.Decode(&result); err != nil {
 			return err
 		}
-		s.ignoreSellers[result.SellerID] = true
+		s.ignoreSellers.Store(result.SellerID, true)
 	}
 	return nil
 }
@@ -187,11 +195,14 @@ func (s *AmazonScraper) doRequestMini(method, _url, proxyAddr string, body io.Re
 	if err != nil {
 		return nil, err
 	}
+	ua := fmt.Sprintf("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/%s Safari/537.36", s.m.Version())
+
 	Header := fhttp.Header{
 		"sec-ch-ua":          {s.m.ClientHintUA()},
 		"content-type":       {"application/json"},
 		"rtt":                {"150"},
 		"sec-ch-ua-mobile":   {"?0"},
+		"user-agent":         {ua},
 		"accept":             {"text/html,*/*"},
 		"x-requested-with":   {"XMLHttpRequest"},
 		"downlink":           {"10"},
@@ -303,74 +314,6 @@ func (s *AmazonScraper) doRequestRaw(method, _url, proxyAddr string, body io.Rea
 	}
 
 	return io.ReadAll(resp.Body)
-}
-
-func (s *AmazonScraper) FetchAndSaveASINData(asin string, salesThreshold int) error {
-	if s.fetchedItems[asin] {
-		return nil
-	}
-	s.fetchedItems[asin] = true
-
-	sellers, err := s.FetchOtherSellers(asin, "")
-	if err != nil {
-		return err
-	}
-
-	for _, seller := range sellers {
-		if s.ignoreSellers[seller.SellerID] {
-			continue
-		}
-		if s.fetchedSellers[seller.SellerID] {
-			continue
-		}
-		s.fetchedSellers[seller.SellerID] = true
-
-		err := s.insertSeller(seller)
-		if err != nil {
-			return err
-		}
-
-		page := 1
-		for {
-			if page > 10 {
-				break
-			}
-			if s.TaskPaused {
-				continue
-			}
-
-			items, err := s.FetchMerchantItems(seller.SellerID, "A2EUQ1WTGCTBG2", "relevanceblender", fmt.Sprintf("%d", page), "")
-			log.Printf("FetchMerchantItems Name:%s SellerID:%s Page:%d\n", seller.Name, seller.SellerID, page)
-			if err != nil {
-				return err
-			}
-			if len(items) == 0 {
-				break
-			}
-			// 将 items 发送到 channel 中
-			select {
-			case s.ItemChan <- items:
-			default:
-				// 超过 channel 最大大小时截断数据
-				log.Println("item channel is full, discarding items")
-			}
-			for _, item := range items {
-				err := s.insertMerchantItem(item)
-				if err != nil {
-					return err
-				}
-				if item.MonthlySales > salesThreshold {
-					err = s.FetchAndSaveASINData(item.ASIN, salesThreshold)
-					if err != nil {
-						return err
-					}
-				}
-			}
-			page++
-		}
-	}
-
-	return nil
 }
 
 // FetchOtherSellers scrapes the Amazon sellers for a given ASIN
@@ -550,99 +493,193 @@ func (s *AmazonScraper) getNextProxy() (string, error) {
 	return proxy.IP, nil
 }
 
+// 采集任务的线程子任务之一
+func (s *AmazonScraper) task_add_seller(asin, proxy string, taskChan *chan models.Seller, waitGroup *sync.WaitGroup, asinChan *chan string) error {
+	defer waitGroup.Done()
+	select {
+	case <-*asinChan:
+	case <-s.spiderTaskCtx.Done():
+		return errors.New("task cancelled")
+	default:
+		break
+	}
+	s.SpiderLog.Printf("采集跟卖信息: Asin:%s, Proxy:%s", asin, proxy)
+	sellers, err := s.FetchOtherSellers(asin, proxy)
+	if err != nil {
+		return err
+	}
+	for _, seller := range sellers {
+		if _, ok := s.ignoreSellers.Load(seller.SellerID); ok { // 用户设置的忽略列表
+			continue
+		}
+		if _, ok := s.fetchedSellers.Load(seller.SellerID); ok { // 本次已经采集过的列表
+			continue
+		}
+		s.fetchedSellers.Store(seller.SellerID, true)
+		select {
+		case *taskChan <- seller:
+		case <-s.spiderTaskCtx.Done():
+			return errors.New("task cancelled")
+		}
+
+		err = s.insertSeller(seller) // 记录到数据库，忽略错误
+		if err != nil {
+			log.Println(err.Error())
+		}
+	}
+	return nil
+}
+
+func (s *AmazonScraper) task_fetch_seller_merchantItems(taskChan *chan models.Seller, salesThreshold int, waitGroup *sync.WaitGroup, asinChan *chan string) error {
+	defer waitGroup.Done()
+
+	task_back := func(seller models.Seller) {
+		go func() {
+			select {
+			case *taskChan <- seller: // 防止被阻塞:
+				break
+			case <-s.spiderTaskCtx.Done():
+				return
+			}
+
+		}()
+	}
+
+	//为每次FetchMerchantItems请求加一个间隔限制，防止被503
+	rateLimiter := time.NewTicker(time.Millisecond * 500)
+
+	for {
+		select {
+		case seller := <-*taskChan:
+			proxy, err := s.getNextProxy()
+			if err != nil {
+				task_back(seller)
+				return fmt.Errorf("getNextProer %v", err)
+			}
+
+			for page := 0; page < 10; page++ {
+				for s.TaskPaused { // 如果任务暂停
+					<-rateLimiter.C // 等待下一次请求时间
+				}
+				select {
+				case <-rateLimiter.C:
+					break
+				case <-s.spiderTaskCtx.Done():
+					return errors.New("reset task")
+				}
+				s.SpiderLog.Printf("采集卖家商品: SellerID:%s Page:%d Proxy:%s", seller.SellerID, page, proxy)
+
+				items, err := s.FetchMerchantItems(seller.SellerID,
+					"A2EUQ1WTGCTBG2", "relevanceblender",
+					fmt.Sprintf("%d", page), proxy)
+				if err != nil {
+					task_back(seller)
+					return fmt.Errorf("FetchMerchantItems: %v", err)
+				}
+
+				if len(items) == 0 {
+					break
+				}
+
+				select {
+				case s.ItemChan <- items:
+				default:
+					s.SpiderLog.Println("item channel is full, discarding items")
+				}
+
+				for _, item := range items {
+					err := s.insertMerchantItem(item)
+					if err != nil {
+						return fmt.Errorf("inserting merchant item: %v", err)
+					}
+
+					if item.MonthlySales > salesThreshold {
+						go func() {
+
+							select {
+							case *asinChan <- item.ASIN: // 如果满了会被阻塞
+								break
+							case <-s.spiderTaskCtx.Done():
+								return
+							}
+							waitGroup.Add(1)
+							err2 := s.task_add_seller(item.ASIN, proxy, taskChan, waitGroup, asinChan)
+							if err2 != nil {
+								s.SpiderLog.Printf("task_add_seller failed: %v", err2)
+							}
+						}()
+					}
+				}
+			}
+		case <-s.spiderTaskCtx.Done():
+			return errors.New("task cancelled")
+		}
+	}
+
+	return nil
+}
+
+func (s *AmazonScraper) GetSpiderLogs() string {
+	return s.logBuffer.String()
+}
+
+func (s *AmazonScraper) ResetSpiderTask() error {
+	if s.SpiderTaskStaring {
+		s.spiderTaskCancelFunc()
+	}
+
+	return nil
+}
+
 func (s *AmazonScraper) SpiderTask(asin string, salesThreshold int, threads int) error {
+	if s.SpiderTaskStaring {
+		return errors.New("spider task is already running")
+	}
+	s.SpiderTaskStaring = true
+	defer func() {
+		s.SpiderTaskStaring = false
+		s.TaskPaused = false
+	}()
+
+	s.fetchedSellers = sync.Map{}
+	s.logBuffer.Reset()
+	s.loadIgnoreSellers()
+	ctx, cancelFunc := context.WithCancel(context.Background())
+	s.spiderTaskCancelFunc = cancelFunc
+	s.spiderTaskCtx = ctx
+
+	s.SpiderLog.Println("Starting SpiderTask...")
 	// 初始化任务
 	proxy, err := s.getNextProxy()
 	if err != nil {
-		log.Printf("Error getting proxy: %v", err)
+		s.SpiderLog.Printf("Error getting proxy: %v", err)
 		return err
 	}
 
 	taskChan := make(chan models.Seller, threads) // 任务通道
+	asinChan := make(chan string, threads)
 	var waitGroup sync.WaitGroup
-
-	// 处理卖家任务
-	addSeller := func(asin, _proxy string) {
-		sellers, err := s.FetchOtherSellers(asin, _proxy)
-		if err != nil {
-			log.Printf("Error fetching sellers for ASIN %s: %v", asin, err)
-			return
-		}
-
-		for _, seller := range sellers {
-			if s.ignoreSellers[seller.SellerID] || s.fetchedSellers[seller.SellerID] {
-				continue
-			}
-
-			s.fetchedSellers[seller.SellerID] = true
-			err := s.insertSeller(seller)
-			if err != nil {
-				log.Printf("Error inserting seller: %v", err)
-				continue
-			}
-
-			taskChan <- seller
-		}
-	}
 
 	// 启动工作协程
 	for i := 0; i < threads; i++ {
 		waitGroup.Add(1)
 		go func() {
-			defer waitGroup.Done()
-
-			for seller := range taskChan {
-				proxy, err := s.getNextProxy()
-				if err != nil {
-					log.Printf("Error getting proxy: %v", err)
-					return
-				}
-
-				for page := 0; page < 10; page++ {
-					items, err := s.FetchMerchantItems(seller.SellerID,
-						"A2EUQ1WTGCTBG2", "relevanceblender",
-						fmt.Sprintf("%d", page), proxy)
-					if err != nil {
-						log.Printf("Error fetching merchant items: %v", err)
-						return
-					}
-
-					if len(items) == 0 {
-						break
-					}
-
-					select {
-					case s.ItemChan <- items:
-					default:
-						log.Println("item channel is full, discarding items")
-					}
-
-					for _, item := range items {
-						err := s.insertMerchantItem(item)
-						if err != nil {
-							log.Printf("Error inserting merchant item: %v", err)
-							return
-						}
-
-						if item.MonthlySales > salesThreshold {
-							go func(asin, _proxy string) {
-								waitGroup.Add(1)
-								defer waitGroup.Done()
-								addSeller(asin, _proxy)
-							}(item.ASIN, proxy)
-						}
-					}
-				}
+			err2 := s.task_fetch_seller_merchantItems(&taskChan, salesThreshold, &waitGroup, &asinChan)
+			if err2 != nil {
+				s.SpiderLog.Printf("Error fetching merchant items: %v", err2)
 			}
-			log.Println("task channel closed")
 		}()
 	}
 
 	// 初始化第一个任务
-	addSeller(asin, proxy)
+	waitGroup.Add(1)
+	err = s.task_add_seller(asin, proxy, &taskChan, &waitGroup, &asinChan)
+	if err != nil {
+		s.SpiderLog.Printf("Error adding seller: %v", err)
+	}
 
 	waitGroup.Wait()
-	close(taskChan) // 关闭任务通道以结束工作协程
+	//close(taskChan) // 关闭任务通道以结束工作协程
 	return nil
 }
 

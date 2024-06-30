@@ -13,6 +13,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -46,6 +47,11 @@ func NewTaskManager(scraper *amazon.AmazonScraper) *TaskManager {
 	return &TaskManager{scraper: scraper, stopCh: make(chan struct{})}
 }
 
+func (tm *TaskManager) Logs(c *gin.Context) {
+	logs := tm.scraper.GetSpiderLogs()
+	c.String(http.StatusOK, logs)
+}
+
 func (tm *TaskManager) HandleWS(c *gin.Context) {
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
@@ -53,7 +59,15 @@ func (tm *TaskManager) HandleWS(c *gin.Context) {
 		return
 	}
 	defer conn.Close()
+	var locker = sync.Mutex{}
+	wsWriteMsg := func(data WSResponse) error {
+		locker.Lock()
+		defer locker.Unlock()
+		return conn.WriteJSON(data)
+	}
 
+	stopCh := make(chan struct{})
+	defer close(stopCh)
 	for {
 		var req WSRequest
 		err := conn.ReadJSON(&req)
@@ -67,7 +81,7 @@ func (tm *TaskManager) HandleWS(c *gin.Context) {
 		switch req.Type {
 		case "start":
 			if tm.scraping {
-				conn.WriteJSON(WSResponse{Type: "error", Error: "A scraping task is already running"})
+				wsWriteMsg(WSResponse{Type: "error", Error: "A scraping task is already running"})
 				continue
 			}
 
@@ -81,42 +95,51 @@ func (tm *TaskManager) HandleWS(c *gin.Context) {
 				err := tm.scraper.SpiderTask(req.ASIN, req.SalesThreshold, req.Threads)
 				if err != nil {
 					log.Println("Error fetching and saving ASIN data: ", err)
-					conn.WriteJSON(WSResponse{Type: "error", Error: err.Error()})
+					wsWriteMsg(WSResponse{Type: "error", Error: err.Error()})
 					return
 				} else {
-					conn.WriteJSON(WSResponse{Type: "error", Error: "采集已经结束"})
+					wsWriteMsg(WSResponse{Type: "status", Status: "completed", Error: "采集完成"})
 				}
 			}()
 
-			conn.WriteJSON(WSResponse{Type: "status", Status: "started"})
+			wsWriteMsg(WSResponse{Type: "status", Status: "started"})
 
 		case "pause":
 			tm.scraper.TaskPaused = true
-			conn.WriteJSON(WSResponse{Type: "status", Status: "paused"})
+			wsWriteMsg(WSResponse{Type: "status", Status: "paused"})
 
 		case "resume":
 			tm.scraper.TaskPaused = false
-			conn.WriteJSON(WSResponse{Type: "status", Status: "resumed"})
+			wsWriteMsg(WSResponse{Type: "status", Status: "resumed"})
+		case "reset":
+			tm.scraper.TaskPaused = false
+			err = tm.scraper.ResetSpiderTask()
+			//wsWriteMsg(WSResponse{Type: "status", Status: "paused"})
 
 		case "status":
 			if tm.scraping {
 				if tm.scraper.TaskPaused {
-					conn.WriteJSON(WSResponse{Type: "status", Status: "paused"})
+					wsWriteMsg(WSResponse{Type: "status", Status: "paused"})
 				} else {
-					conn.WriteJSON(WSResponse{Type: "status", Status: "started"})
+					wsWriteMsg(WSResponse{Type: "status", Status: "started"})
 				}
 			} else {
-				conn.WriteJSON(WSResponse{Type: "status", Status: "completed"})
+				wsWriteMsg(WSResponse{Type: "status", Status: "completed"})
 			}
 		}
 
 		go func() {
-			for tm.scraping {
+			for {
 				select {
+				case <-stopCh:
+					return
 				case items := <-tm.scraper.ItemChan:
-					conn.WriteJSON(WSResponse{Type: "data", Data: items})
+					err := wsWriteMsg(WSResponse{Type: "data", Data: items})
+					if err != nil {
+						log.Println("Error writing JSON to websocket:", err)
+						return
+					}
 				case <-time.After(5 * time.Second):
-					// Check if scraping is still active
 					if !tm.scraping {
 						return
 					}
@@ -233,6 +256,7 @@ func main() {
 	taskManager := NewTaskManager(scraper)
 
 	r.GET("/ws", taskManager.HandleWS)
+	r.GET("/log", taskManager.Logs)
 
 	r.GET("/query", taskManager.Query)
 
@@ -352,7 +376,12 @@ func updateProxyStatus(c *gin.Context) {
 		return
 	}
 	collection := db.Collection("proxies")
-	_, err := collection.UpdateOne(context.TODO(), bson.M{"ip": proxy.IP}, bson.M{"$set": bson.M{"status": proxy.Status, "message": proxy.Message}})
+	_, err := collection.UpdateOne(context.TODO(), bson.M{"ip": proxy.IP}, bson.M{"$set": bson.M{
+		"status":      proxy.Status,
+		"message":     proxy.Message,
+		"error_count": 0,
+		"updated_at":  time.Now(),
+	}})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
