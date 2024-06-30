@@ -48,7 +48,7 @@ type AmazonScraper struct {
 // NewAmazonScraper creates a new AmazonScraper with a default HTTP client
 func NewAmazonScraper(dbURI, dbName string, maxChanSize int) (*AmazonScraper, error) {
 	client := &http.Client{}
-	latestVersion := mimic.MustGetLatestVersion(mimic.PlatformWindows)
+	latestVersion := "126.0.6478.127" //mimic.MustGetLatestVersion(mimic.PlatformWindows)
 	m, _ := mimic.Chromium(mimic.BrandChrome, latestVersion)
 	mongoClient, err := mongo.Connect(context.TODO(), options.Client().ApplyURI(dbURI))
 	if err != nil {
