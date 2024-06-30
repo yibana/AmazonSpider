@@ -271,7 +271,7 @@ func main() {
 	r.PUT("/proxies", updateProxyStatus)
 	r.DELETE("/proxies", deleteProxy)
 
-	r.Run(":8080")
+	r.Run(":6060")
 }
 
 func getIgnoreSellers(c *gin.Context) {
