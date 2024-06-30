@@ -26,7 +26,7 @@ git pull
 # Build the binary
 echo "Building binary..."
 export GOPROXY=https://goproxy.cn,direct
-go build -o SpiderGin_backend main.go
+go build -o SpiderGin_backend cmd/SpiderGin/main.go
 
 chmod +x deploy.sh
 
