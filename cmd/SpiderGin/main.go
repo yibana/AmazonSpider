@@ -163,6 +163,97 @@ type IgnoreSeller struct {
 	SellerID string `json:"seller_id" bson:"seller_id"`
 }
 
+func (tm *TaskManager) QueryGrpup(c *gin.Context) {
+	var params QueryParams
+	if err := c.ShouldBindQuery(&params); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	collection := tm.scraper.GetDB("merchant_items")
+	filter := bson.M{}
+
+	if params.PriceMin > 0 {
+		filter["price"] = bson.M{"$gte": params.PriceMin}
+	}
+	if params.PriceMax > 0 {
+		if filter["price"] != nil {
+			filter["price"].(bson.M)["$lte"] = params.PriceMax
+		} else {
+			filter["price"] = bson.M{"$lte": params.PriceMax}
+		}
+	}
+	if params.MonthlySalesMin > 0 {
+		filter["monthly_sales"] = bson.M{"$gte": params.MonthlySalesMin}
+	}
+	if params.MonthlySalesMax > 0 {
+		if filter["monthly_sales"] != nil {
+			filter["monthly_sales"].(bson.M)["$lte"] = params.MonthlySalesMax
+		} else {
+			filter["monthly_sales"] = bson.M{"$lte": params.MonthlySalesMax}
+		}
+	}
+	if params.MerchantID != "" {
+		filter["merchant_id"] = params.MerchantID
+	}
+
+	// 聚合管道
+	pipeline := bson.A{
+		bson.M{"$match": filter},
+		bson.M{"$group": bson.M{
+			"_id":   "$asin",
+			"count": bson.M{"$sum": 1},
+			"items": bson.M{"$push": "$$ROOT"},
+		}},
+		bson.M{"$skip": int64(params.Page * params.Limit)},
+		bson.M{"$limit": int64(params.Limit)},
+	}
+
+	cursor, err := collection.Aggregate(context.TODO(), pipeline)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	defer cursor.Close(context.TODO())
+
+	var results []bson.M
+	if err := cursor.All(context.TODO(), &results); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// 计算总数
+	totalPipeline := bson.A{
+		bson.M{"$match": filter},
+		bson.M{"$group": bson.M{
+			"_id": "$asin",
+		}},
+		bson.M{"$count": "total"},
+	}
+	totalCursor, err := collection.Aggregate(context.TODO(), totalPipeline)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	defer totalCursor.Close(context.TODO())
+
+	var totalResult []bson.M
+	if err := totalCursor.All(context.TODO(), &totalResult); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	total := int32(0)
+	if len(totalResult) > 0 {
+		total = totalResult[0]["total"].(int32)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"total": total,
+		"data":  results,
+	})
+}
+
 func (tm *TaskManager) Query(c *gin.Context) {
 	var params QueryParams
 	if err := c.ShouldBindQuery(&params); err != nil {
@@ -259,6 +350,7 @@ func main() {
 	r.GET("/log", taskManager.Logs)
 
 	r.GET("/query", taskManager.Query)
+	r.GET("/query-group", taskManager.QueryGrpup)
 
 	// Ignore Sellers List APIs
 	r.GET("/ignore-sellers", getIgnoreSellers)
