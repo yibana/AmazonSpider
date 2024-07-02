@@ -263,7 +263,7 @@ func main() {
 	// Ignore Sellers List APIs
 	r.GET("/ignore-sellers", getIgnoreSellers)
 	r.POST("/ignore-sellers", addIgnoreSeller)
-	r.DELETE("/ignore-sellers/:seller_id", deleteIgnoreSeller)
+	r.DELETE("/ignore-sellers", deleteIgnoreSeller)
 
 	// Proxies APIs
 	r.GET("/proxies", getProxies)
@@ -311,14 +311,18 @@ func addIgnoreSeller(c *gin.Context) {
 }
 
 func deleteIgnoreSeller(c *gin.Context) {
-	sellerID := c.Param("seller_id")
+	var seller IgnoreSeller
+	if err := c.ShouldBindJSON(&seller); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	collection := db.Collection("ignore_sellers")
-	_, err := collection.DeleteOne(context.TODO(), bson.M{"seller_id": sellerID})
+	_, err := collection.DeleteOne(context.TODO(), bson.M{"seller_id": seller.SellerID})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"deleted": sellerID})
+	c.JSON(http.StatusOK, gin.H{"deleted": seller.SellerID})
 }
 
 func getProxies(c *gin.Context) {

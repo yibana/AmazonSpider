@@ -8,8 +8,11 @@ require (
 	github.com/Danny-Dasilva/CycleTLS/cycletls v1.0.26
 	github.com/PuerkitoBio/goquery v1.8.1
 	github.com/gin-gonic/gin v1.9.0
+	github.com/go-rod/rod v0.116.1
+	github.com/go-rod/stealth v0.4.9
 	github.com/gocolly/colly v1.2.0
 	github.com/gorilla/websocket v1.5.3
+	github.com/mssola/user_agent v0.6.0
 	github.com/saucesteals/fhttp v0.0.0-20240117034418-b4f835e6c226
 	github.com/saucesteals/mimic v0.0.0-20240117034535-a989cf81feec
 	go.mongodb.org/mongo-driver v1.16.0
@@ -55,6 +58,11 @@ require (
 	github.com/xdg-go/scram v1.1.2 // indirect
 	github.com/xdg-go/stringprep v1.0.4 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20181117223130-1be2e3e5546d // indirect
+	github.com/ysmood/fetchup v0.2.3 // indirect
+	github.com/ysmood/goob v0.4.0 // indirect
+	github.com/ysmood/got v0.40.0 // indirect
+	github.com/ysmood/gson v0.7.3 // indirect
+	github.com/ysmood/leakless v0.8.0 // indirect
 	golang.org/x/arch v0.0.0-20210923205945-b76863e36670 // indirect
 	golang.org/x/crypto v0.22.0 // indirect
 	golang.org/x/sync v0.7.0 // indirect

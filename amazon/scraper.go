@@ -2,12 +2,15 @@ package amazon
 
 import (
 	"AmazonSpider/models"
+	"AmazonSpider/utils"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/Danny-Dasilva/CycleTLS/cycletls"
 	"github.com/PuerkitoBio/goquery"
+	tls "github.com/refraction-networking/utls"
 	fhttp "github.com/saucesteals/fhttp"
 	"github.com/saucesteals/mimic"
 	"go.mongodb.org/mongo-driver/bson"
@@ -17,6 +20,7 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/url"
@@ -157,25 +161,26 @@ func (s *AmazonScraper) insertSeller(seller models.Seller) error {
 	return err
 }
 
-func (s *AmazonScraper) doRequest(method, _url, proxyAddr string, body io.Reader) ([]byte, error) {
+func (s *AmazonScraper) doRequest(method, _url, proxyAddr string, body io.Reader, header map[string]string) ([]byte, error) {
 	if true {
-		return s.doRequestMini(method, _url, proxyAddr, body)
+		return s.doRequestMini(method, _url, proxyAddr, body, header)
 	} else {
-		return s.doRequestRaw(method, _url, proxyAddr, body)
+		return s.doRequestRaw(method, _url, proxyAddr, body, header)
 	}
 }
 
-func (s *AmazonScraper) doRequestMini(method, _url, proxyAddr string, body io.Reader) ([]byte, error) {
+func (s *AmazonScraper) doRequestMini(method, _url, proxyAddr string, body io.Reader, header map[string]string) ([]byte, error) {
 
 	client := &fhttp.Client{
 		Timeout: 10 * time.Second, // 设置超时时间
 	}
 
 	transport := &fhttp.Transport{}
+	transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	if strings.TrimSpace(proxyAddr) != "" {
 		u, err := url.Parse(proxyAddr)
 		if err != nil {
-			panic(err)
+			return nil, err
 		}
 		d := net.Dialer{}
 		if strings.HasPrefix(proxyAddr, "http") { // http代理
@@ -196,35 +201,53 @@ func (s *AmazonScraper) doRequestMini(method, _url, proxyAddr string, body io.Re
 		return nil, err
 	}
 	ua := fmt.Sprintf("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/%s Safari/537.36", s.m.Version())
-
+	headerOrder := []string{
+		"sec-ch-ua", "rtt", "sec-ch-ua-mobile",
+		"user-agent", "accept", "x-requested-with",
+		"downlink", "ect", "sec-ch-ua-platform",
+		"sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest",
+		"accept-encoding", "accept-language",
+	}
+	if header != nil {
+		headerOrder = []string{}
+		for key, _ := range header {
+			headerOrder = append(headerOrder, key)
+		}
+	}
+	// Adding more randomness to header values
+	acceptOptions := []string{"text/html,*/*", "application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"}
+	languageOptions := []string{"en-US,en;q=0.9", "en-GB,en;q=0.8", "en,en;q=0.7"}
+	platformOptions := []string{`"Windows"`, `"macOS"`, `"Linux"`}
+	utils.ShuffleHeaderOrder(headerOrder)
 	Header := fhttp.Header{
-		"sec-ch-ua":          {s.m.ClientHintUA()},
-		"content-type":       {"application/json"},
-		"rtt":                {"150"},
-		"sec-ch-ua-mobile":   {"?0"},
-		"user-agent":         {ua},
-		"accept":             {"text/html,*/*"},
-		"x-requested-with":   {"XMLHttpRequest"},
-		"downlink":           {"10"},
-		"ect":                {"4g"},
-		"sec-ch-ua-platform": {`"Windows"`},
-		"sec-fetch-site":     {"same-origin"},
-		"sec-fetch-mode":     {"cors"},
-		"sec-fetch-dest":     {"empty"},
-		"accept-encoding":    {"gzip, deflate, br"},
-		"accept-language":    {"en,en_US;q=0.9"},
-		fhttp.HeaderOrderKey: {
-			"sec-ch-ua", "rtt", "sec-ch-ua-mobile",
-			"user-agent", "accept", "x-requested-with",
-			"downlink", "ect", "sec-ch-ua-platform",
-			"sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest",
-			"accept-encoding", "accept-language",
-		},
+		"sec-ch-ua":           {s.m.ClientHintUA()},
+		"content-type":        {"application/json"},
+		"rtt":                 {"150"},
+		"sec-ch-ua-mobile":    {"?0"},
+		"user-agent":          {ua},
+		"accept":              {acceptOptions[rand.Intn(len(acceptOptions))]},
+		"x-requested-with":    {"XMLHttpRequest"},
+		"downlink":            {"10"},
+		"ect":                 {"4g"},
+		"sec-ch-ua-platform":  {platformOptions[rand.Intn(len(platformOptions))]},
+		"sec-fetch-site":      {"same-origin"},
+		"sec-fetch-mode":      {"cors"},
+		"sec-fetch-dest":      {"empty"},
+		"accept-encoding":     {"gzip, deflate, br"},
+		"accept-language":     {languageOptions[rand.Intn(len(languageOptions))]},
+		fhttp.HeaderOrderKey:  headerOrder,
 		fhttp.PHeaderOrderKey: s.m.PseudoHeaderOrder(),
 	}
 	req.Header = Header
+	if header != nil {
+		req.Header = fhttp.Header{fhttp.HeaderOrderKey: headerOrder}
+		for key, val := range header {
+			req.Header[key] = []string{val}
+		}
+	}
+
 	// Set the necessary headers and cookies
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+	//req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
 	req.AddCookie(&fhttp.Cookie{Name: "i18n-prefs", Value: "CAD"})
 
 	// Send the request using the new HTTP client
@@ -258,7 +281,7 @@ func (s *AmazonScraper) doRequestMini(method, _url, proxyAddr string, body io.Re
 	return []byte(Body), nil
 }
 
-func (s *AmazonScraper) doRequestRaw(method, _url, proxyAddr string, body io.Reader) ([]byte, error) {
+func (s *AmazonScraper) doRequestRaw(method, _url, proxyAddr string, body io.Reader, header map[string]string) ([]byte, error) {
 
 	client := &http.Client{
 		Timeout: 10 * time.Second, // 设置超时时间
@@ -291,6 +314,11 @@ func (s *AmazonScraper) doRequestRaw(method, _url, proxyAddr string, body io.Rea
 
 	// Set the necessary headers and cookies
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+	if header != nil {
+		for key, val := range header {
+			req.Header.Set(key, val)
+		}
+	}
 	req.AddCookie(&http.Cookie{Name: "i18n-prefs", Value: "CAD"})
 
 	// Send the request using the new HTTP client
@@ -320,7 +348,37 @@ func (s *AmazonScraper) doRequestRaw(method, _url, proxyAddr string, body io.Rea
 func (s *AmazonScraper) FetchOtherSellers(asin, proxy string) ([]models.Seller, error) {
 	url := fmt.Sprintf("https://www.amazon.ca/gp/product/ajax/ref=dp_aod_NEW_mbc?asin=%s&m=&qid=&smid=&sourcecustomerorglistid=&sourcecustomerorglistitemid=&sr=&pc=dp&experienceId=aodAjaxMain", asin)
 
-	body, err := s.doRequest("GET", url, proxy, nil)
+	rand_width := utils.GenerateRandomViewportWidth()
+
+	header := map[string]string{
+		"Host":                       "www.amazon.ca",
+		"Connection":                 "keep-alive",
+		"Pragma":                     "no-cache",
+		"sec-ch-ua":                  "\"Not/A)Brand\";v=\"8\", \"Chromium\";v=\"126\", \"Google Chrome\";v=\"126\"",
+		"sec-ch-device-memory":       "8",
+		"sec-ch-viewport-width":      rand_width,
+		"sec-ch-ua-platform-version": "\"10.0.0\"",
+		"X-Requested-With":           "XMLHttpRequest",
+		"dpr":                        "1.25",
+		"downlink":                   "10",
+		"sec-ch-ua-platform":         "\"Windows\"",
+		"device-memory":              "8",
+		"rtt":                        "100",
+		"sec-ch-ua-mobile":           "?0",
+		"User-Agent":                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+		"viewport-width":             rand_width,
+		"Accept":                     "text/html,*/*",
+		"sec-ch-dpr":                 "1.25",
+		"ect":                        "4g",
+		"Sec-Fetch-Site":             "same-origin",
+		"Sec-Fetch-Mode":             "cors",
+		"Sec-Fetch-Dest":             "empty",
+		"Referer":                    fmt.Sprintf("https://www.amazon.ca/dp/%s?th=1", asin),
+		"Accept-Encoding":            "gzip, deflate, br, zstd",
+		"Accept-Language":            "zh-CN,zh;q=0.9",
+		"Cookie":                     "csm-hit=tb:C9FFYRE5TFZE2XF9QA1H+s-C9FFYRE5TFZE2XF9QA1H|1719889412032&t:1719889422689&adb:adblk_no",
+	}
+	body, err := s.doRequest("GET", url, proxy, nil, header)
 	if err != nil {
 		return nil, err
 	}
@@ -394,8 +452,44 @@ func (s *AmazonScraper) FetchMerchantItems(merchantID, marketplaceID, sortType, 
 
 	// 通常一页显示16条数据，如果大于等于16则说明可能有下一页
 	url := fmt.Sprintf("https://www.amazon.ca/s/query?i=merchant-items&me=%s&s=%s&marketplaceID=%s&page=1&ref=sr_st_%s&page=%s", merchantID, sortType, marketplaceID, sortType, page)
+	rand_width := utils.GenerateRandomViewportWidth()
+	headers := map[string]string{
+		"Host":                         "www.amazon.ca",
+		"Connection":                   "keep-alive",
+		"Pragma":                       "no-cache",
+		"Cache-Control":                "no-cache",
+		"sec-ch-ua":                    `"Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"`,
+		"X-Amazon-s-swrs-version":      "1B3C4881FC2B0AD948545A0D3B323D17,D41D8CD98F00B204E9800998ECF8427E",
+		"X-Amazon-s-fallback-url":      url,
+		"sec-ch-device-memory":         "8",
+		"sec-ch-viewport-width":        rand_width,
+		"sec-ch-ua-platform-version":   `"10.0.0"`,
+		"X-Requested-With":             "XMLHttpRequest",
+		"dpr":                          "1.25",
+		"downlink":                     "10",
+		"sec-ch-ua-platform":           `"Windows"`,
+		"device-memory":                "8",
+		"X-Amazon-s-mismatch-behavior": "FALLBACK",
+		"rtt":                          "200",
+		"sec-ch-ua-mobile":             "?0",
+		"x-amazon-rush-fingerprints":   "AmazonRushAssetLoader:1202F8AA9B9E3A62A246BF3FA42812770110C222|AmazonRushFramework:5A82CF8689ED82AAA920893CD095BCCCED05133A|AmazonRushRouter:1F95DFA8ABBD44B9003CFFA46D316B571F75C03E",
+		"User-Agent":                   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+		"viewport-width":               rand_width,
+		"Content-Type":                 "application/json",
+		"Accept":                       "text/html,ajax/ajax,*/*",
+		"sec-ch-dpr":                   "1.25",
+		"ect":                          "4g",
+		"Origin":                       "https://www.amazon.ca",
+		"Sec-Fetch-Site":               "same-origin",
+		"Sec-Fetch-Mode":               "cors",
+		"Sec-Fetch-Dest":               "empty",
+		"Referer":                      fmt.Sprintf("https://www.amazon.ca/s?i=merchant-items&me=%s&s=exact-aware-popularity-rank", merchantID),
+		"Accept-Encoding":              "gzip, deflate, br, zstd",
+		"Accept-Language":              "zh-CN,zh;q=0.9",
+		"Cookie":                       "session-id=143-0080163-8500924; ubid-acbca=133-2547739-3347243; csm-hit=tb:Y7QT3RJM9EMACNVT5ZCK+s-Y7QT3RJM9EMACNVT5ZCK|1719891557633&t:1719891557633&adb:adblk_no; session-token=MD4iLShY7c9my1TC1s0c7cpb3lbx4nkD0PbbyQMkSKeZzZSxbIjdSQnXMdoY97KT6A7GN28cJ6ajdTmyv6yJlCeR61wohHWSA5zggxEGw7vdenkLDYSkQhleAx3+HFUhmesV6nPi95xnydAEgGsB+yBPhZq+j8r1Tc2g8BHjaXsskaMYaMfKDnVPFsVQdwUmM/UdqMNHtSCtaSMCsAaRLoUiVK8qnJih4JUCsfMcox881l7Tg+DM6rM3bSJxpH9WQK531s5YSqaZtiGQMU4OBQ2r9dpVFZQGeMiLqY/42o43Xs5P4JW3Xm4MUqMqy2wgGhp+Im8n8BiyUhze8K0kElnW/STwcc9o",
+	}
 
-	body, err := s.doRequest("GET", url, proxy, nil)
+	body, err := s.doRequest("POST", url, proxy, bytes.NewBuffer([]byte("{\"customer-action\":\"query\"}")), headers)
 	if err != nil {
 		return nil, err
 	}
