@@ -4,6 +4,7 @@ import (
 	"AmazonSpider/models"
 	"AmazonSpider/utils"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -170,7 +171,7 @@ func (s *AmazonScraper) doRequest(method, _url, proxyAddr string, body io.Reader
 func (s *AmazonScraper) doRequestMini(method, _url, proxyAddr string, body io.Reader, header map[string]string) ([]byte, error) {
 
 	client := &fhttp.Client{
-		Timeout: 10 * time.Second, // 设置超时时间
+		Timeout: 60 * time.Second, // 设置超时时间
 	}
 
 	transport := &fhttp.Transport{}
@@ -246,7 +247,7 @@ func (s *AmazonScraper) doRequestMini(method, _url, proxyAddr string, body io.Re
 	}
 
 	// Set the necessary headers and cookies
-	//req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
 	req.AddCookie(&fhttp.Cookie{Name: "i18n-prefs", Value: "CAD"})
 
 	// Send the request using the new HTTP client
@@ -283,7 +284,7 @@ func (s *AmazonScraper) doRequestMini(method, _url, proxyAddr string, body io.Re
 func (s *AmazonScraper) doRequestRaw(method, _url, proxyAddr string, body io.Reader, header map[string]string) ([]byte, error) {
 
 	client := &http.Client{
-		Timeout: 10 * time.Second, // 设置超时时间
+		Timeout: 60 * time.Second, // 设置超时时间
 	}
 
 	transport := &http.Transport{}
@@ -314,6 +315,7 @@ func (s *AmazonScraper) doRequestRaw(method, _url, proxyAddr string, body io.Rea
 
 	// Set the necessary headers and cookies
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+	req.Header.Add("Accept-Encoding", "gzip") // 使用gzip压缩传输数据让访问更快
 	if header != nil {
 		for key, val := range header {
 			req.Header.Set(key, val)
@@ -340,7 +342,13 @@ func (s *AmazonScraper) doRequestRaw(method, _url, proxyAddr string, body io.Rea
 		}
 		return nil, fmt.Errorf("failed to fetch data: %s", resp.Status)
 	}
+	// 有gzip压缩时,需要解压缩读取返回内容
+	if resp.Header.Get("Content-Encoding") == "gzip" {
+		reader, _ := gzip.NewReader(resp.Body) // gzip解压缩
+		defer reader.Close()
+		return ioutil.ReadAll(reader)
 
+	}
 	return io.ReadAll(resp.Body)
 }
 
@@ -365,7 +373,7 @@ func (s *AmazonScraper) FetchOtherSellers(asin, proxy string) ([]models.Seller, 
 		"device-memory":              "8",
 		"rtt":                        "100",
 		"sec-ch-ua-mobile":           "?0",
-		"User-Agent":                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+		"User-Agent":                 "OneMoreTime",
 		"viewport-width":             rand_width,
 		"Accept":                     "text/html,*/*",
 		"sec-ch-dpr":                 "1.25",
@@ -584,6 +592,10 @@ func (s *AmazonScraper) getNextProxy() (string, error) {
 		return "", fmt.Errorf("failed to update proxy: %v", err)
 	}
 
+	if proxy.IP == "socks5://none" {
+		return "", nil
+	}
+
 	return proxy.IP, nil
 }
 
@@ -597,7 +609,7 @@ func (s *AmazonScraper) task_add_seller(asin, proxy string, taskChan *chan model
 	default:
 		break
 	}
-	s.SpiderLog.Printf("采集跟卖信息: Asin:%s, Proxy:%s", asin, proxy)
+	s.SpiderLog.Printf("跟卖信息: Asin:%s, Proxy:%s", asin, proxy)
 	sellers, err := s.FetchOtherSellers(asin, proxy)
 	if err != nil {
 		return err
@@ -640,7 +652,8 @@ func (s *AmazonScraper) task_fetch_seller_merchantItems(taskChan *chan models.Se
 	}
 
 	//为每次FetchMerchantItems请求加一个间隔限制，防止被503
-	rateLimiter := time.NewTicker(time.Millisecond * 500)
+	rateTime := time.Millisecond * 3000
+	rateLimiter := time.NewTicker(rateTime)
 
 	for {
 		select {
@@ -702,8 +715,11 @@ func (s *AmazonScraper) task_fetch_seller_merchantItems(taskChan *chan models.Se
 								s.SpiderLog.Printf("task_add_seller failed: %v", err2)
 							}
 						}()
+						time.Sleep(rateTime)
 					}
+
 				}
+
 			}
 		case <-s.spiderTaskCtx.Done():
 			return errors.New("task cancelled")
