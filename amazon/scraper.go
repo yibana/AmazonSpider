@@ -652,9 +652,9 @@ func (s *AmazonScraper) task_fetch_seller_merchantItems(taskChan *chan models.Se
 	}
 
 	//为每次FetchMerchantItems请求加一个间隔限制，防止被503
-	rateTime := time.Millisecond * 3000
+	rateTime := time.Millisecond * 4000
 	rateLimiter := time.NewTicker(rateTime)
-
+	failcount := 0
 	for {
 		select {
 		case seller := <-*taskChan:
@@ -680,14 +680,18 @@ func (s *AmazonScraper) task_fetch_seller_merchantItems(taskChan *chan models.Se
 					"A2EUQ1WTGCTBG2", "relevanceblender",
 					fmt.Sprintf("%d", page), proxy)
 				if err != nil {
+					fmt.Println(err)
 					task_back(seller)
-					return fmt.Errorf("FetchMerchantItems: %v", err)
+					failcount += 1
+					time.Sleep(time.Second * time.Duration(failcount*10))
+					//return fmt.Errorf("FetchMerchantItems: %v", err)
+					break
 				}
 
 				if len(items) == 0 {
 					break
 				}
-
+				failcount = 0
 				select {
 				case s.ItemChan <- items:
 				default:
