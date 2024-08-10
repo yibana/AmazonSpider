@@ -2,20 +2,20 @@
 
 # Check if the "-kill" parameter is passed
 if [ "$1" = "-kill" ]; then
-  # Kill the existing SpiderGin_backend process if it's running
-  if pgrep SpiderGin_backend >/dev/null 2>&1; then
-    echo "Stopping existing SpiderGin_backend process..."
-    pkill -f SpiderGin_backend
+  # Kill the existing SpiderGin process if it's running
+  if pgrep SpiderGin >/dev/null 2>&1; then
+    echo "Stopping existing SpiderGin process..."
+    pkill -f SpiderGin
   else
-    echo "SpiderGin_backend process is not running"
+    echo "SpiderGin process is not running"
   fi
   exit 0
 fi
 
-# Check if SpiderGin_backend process is already running, and end the process
-if pgrep SpiderGin_backend >/dev/null 2>&1; then
-  echo "Stopping existing SpiderGin_backend process..."
-  pkill -f SpiderGin_backend
+# Check if SpiderGin process is already running, and end the process
+if pgrep SpiderGin >/dev/null 2>&1; then
+  echo "Stopping existing SpiderGin process..."
+  pkill -f SpiderGin
 fi
 
 # Update code repository
@@ -26,12 +26,12 @@ git pull
 # Build the binary
 echo "Building binary..."
 export GOPROXY=https://goproxy.cn,direct
-go build -o SpiderGin_backend main.go
+go build -o SpiderGin main.go
 
 chmod +x deploy.sh
 
-# Start SpiderGin_backend and log output to SpiderGin_backend.log
-nohup ./SpiderGin_backend > SpiderGin_backend.log 2>&1 &
+# Start SpiderGin and log output to SpiderGin.log
+nohup ./SpiderGin > SpiderGin.log 2>&1 &
 
 # View logs
-tail -f SpiderGin_backend.log
+tail -f SpiderGin.log

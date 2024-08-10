@@ -16,12 +16,10 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
-	"golang.org/x/net/proxy"
 	"io"
 	"io/ioutil"
 	"log"
 	"math/rand"
-	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -182,18 +180,19 @@ func (s *AmazonScraper) doRequestMini(method, _url, proxyAddr string, body io.Re
 		if err != nil {
 			return nil, err
 		}
-		d := net.Dialer{}
-		if strings.HasPrefix(proxyAddr, "http") { // http代理
-			transport.DialContext = d.DialContext
-			transport.Proxy = fhttp.ProxyURL(u)
-		} else {
-			dialer, err := proxy.FromURL(u, &d)
-			if err != nil {
-				return nil, err
-			}
-			// set our socks5 as the dialer
-			transport.Dial = dialer.Dial
-		}
+		//d := net.Dialer{}
+		//if strings.HasPrefix(proxyAddr, "http") { // http代理
+		//	transport.DialContext = d.DialContext
+		//	transport.Proxy = fhttp.ProxyURL(u)
+		//} else {
+		//	dialer, err := proxy.FromURL(u, &d)
+		//	if err != nil {
+		//		return nil, err
+		//	}
+		//	// set our socks5 as the dialer
+		//	transport.Dial = dialer.Dial
+		//}
+		transport.Proxy = fhttp.ProxyURL(u)
 		client.Transport = transport
 	}
 	req, err := fhttp.NewRequest(method, _url, body)
@@ -293,18 +292,19 @@ func (s *AmazonScraper) doRequestRaw(method, _url, proxyAddr string, body io.Rea
 		if err != nil {
 			panic(err)
 		}
-		d := net.Dialer{}
-		if strings.HasPrefix(proxyAddr, "http") { // http代理
-			transport.DialContext = d.DialContext
-			transport.Proxy = http.ProxyURL(u)
-		} else {
-			dialer, err := proxy.FromURL(u, &d)
-			if err != nil {
-				return nil, err
-			}
-			// set our socks5 as the dialer
-			transport.Dial = dialer.Dial
-		}
+		//d := net.Dialer{}
+		//if strings.HasPrefix(proxyAddr, "http") { // http代理
+		//	transport.DialContext = d.DialContext
+		//	transport.Proxy = http.ProxyURL(u)
+		//} else {
+		//	dialer, err := proxy.FromURL(u, &d)
+		//	if err != nil {
+		//		return nil, err
+		//	}
+		//	// set our socks5 as the dialer
+		//	transport.Dial = dialer.Dial
+		//}
+		transport.Proxy = http.ProxyURL(u)
 		client.Transport = transport
 	}
 	req, err := http.NewRequest(method, _url, body)
